@@ -1,0 +1,1 @@
+# ngc-trading-Journal
