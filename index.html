@@ -344,8 +344,9 @@ function perfDrawdownSeries(equity){
   var peak=equity.length?equity[0].bal:100;
   var arr=[], maxDD=0, curStart=null, maxDur=0;
   equity.forEach(function(e){
-    if(e.bal>peak){peak=e.bal;}
-    var dd=peak?((e.bal-peak)/peak*100):0;
+    var pb=e.bal-(e.adjCum||0);
+    if(pb>peak){peak=pb;}
+    var dd=peak?((pb-peak)/peak*100):0;
     arr.push({date:e.date,dd:dd,bal:e.bal});
     if(dd<maxDD)maxDD=dd;
   });
@@ -450,15 +451,19 @@ function perfEquitySeriesForAccount(trades,acctSize,firmId){
   });
   var sorted=subset.slice().sort(function(a,b){return(parseDate(a.timestamp)||0)-(parseDate(b.timestamp)||0);});
   var bal=start,out=[{bal:bal,pct:0,date:null}];
+  var adjL=firmId!=null?fpAdjFor(firmId):[],ai=0,adjCum=0;
   sorted.forEach(function(t){
+    var od0=parseDate(t.timestamp);
+    while(ai<adjL.length&&od0&&adjL[ai].d<=od0){bal+=adjL[ai].amt;adjCum+=adjL[ai].amt;ai++}
     var r=firmId!=null?getAccRes(t,firmId):getCanonicalRes(t);
     var p=parseFloat(r.actualPct)||0;
     // MT5-imported trades carry exact dollars: add them (no compounding) so Performance matches MT5 / account page
     if(r.pnlUsd!=null&&r.pnlUsd!==""&&!isNaN(parseFloat(r.pnlUsd))&&firmId!=null){var pu=parseFloat(r.pnlUsd);p=bal>0?pu/bal*100:p;bal=bal+pu}
     else if(firmId!=null){bal=bal+start*p/100}
     else bal=bal*(1+p/100);
-    out.push({bal:bal,pct:p,date:parseDate(t.timestamp),trade:t});
+    out.push({bal:bal,pct:p,date:parseDate(t.timestamp),trade:t,adjCum:adjCum});
   });
+  while(ai<adjL.length){bal+=adjL[ai].amt;adjCum+=adjL[ai].amt;ai++;var lp=out[out.length-1];lp.bal=bal;lp.adjCum=adjCum}
   return out;
 }
 function rpt_monthMapForAccount(trades,firmId,accountSize){
@@ -608,6 +613,8 @@ function rpt_avgHoldingDays(closed){
   });
   return c?days/c:0;
 }
+// ── BALANCE ADJUSTMENTS (withdrawals / balance corrections read from the MT5 report) ──
+function fpAdjFor(firmId){try{var m=window.NBS_ADJ;var l=(m&&firmId!=null)?m[firmId]:null;if(!l)return[];return l.map(function(a){return{d:parseDate(a.time),amt:parseFloat(a.amount)||0}}).filter(function(a){return a.d&&a.amt}).sort(function(a,b){return a.d-b.d})}catch(e){return[]}}
 // ── ANALYTICS ──
 function calcStats(trades,acctSize,firmId){
   var getR=function(t){return getAccRes(t,firmId)};
@@ -626,12 +633,20 @@ function calcStats(trades,acctSize,firmId){
   var sorted=[].concat(closed).sort(function(a,b){return(parseDate(a.timestamp)||0)-(parseDate(b.timestamp)||0)});
   var bal=parseFloat(acctSize)||100000,hwm=bal,hwmDate=null;
   var equity=[{bal:bal}];
-  sorted.forEach(function(t){var p2=pnl(t);bal+=p2;if(bal>hwm){hwm=bal;hwmDate=t.timestamp?t.timestamp.substring(0,9):null}equity.push({bal:bal,pnl:p2,outcome:getR(t).outcome})});
+  var adjL=fpAdjFor(firmId),ai=0,adjCum=0,balNet=bal,hwmNet=bal;
+  sorted.forEach(function(t){
+    var od=parseDate(t.timestamp);
+    while(ai<adjL.length&&od&&adjL[ai].d<=od){bal+=adjL[ai].amt;adjCum+=adjL[ai].amt;ai++}
+    var p2=pnl(t);bal+=p2;balNet+=p2;
+    if(balNet>hwmNet){hwmNet=balNet;hwm=bal;hwmDate=t.timestamp?t.timestamp.substring(0,9):null}
+    equity.push({bal:bal,pnl:p2,outcome:getR(t).outcome,adjCum:adjCum});
+  });
+  while(ai<adjL.length){bal+=adjL[ai].amt;adjCum+=adjL[ai].amt;ai++;equity[equity.length-1]=Object.assign({},equity[equity.length-1],{bal:bal,adjCum:adjCum})}
   var wkMap={};
   closed.forEach(function(t){var d=parseDate(t.timestamp);if(!d)return;var wk=getWk(d);if(!wkMap[wk])wkMap[wk]={week:wk,trades:0,wins:0,losses:0,pnl:0};var p2=pnl(t);wkMap[wk].trades++;if(p2>0)wkMap[wk].wins++;else if(p2<0)wkMap[wk].losses++;wkMap[wk].pnl+=p2});
   var weekly=Object.values(wkMap).sort(function(a,b){return b.week>a.week?1:-1}).slice(-12);
   var splitSt=function(dir){var tr=closed.filter(function(t){return t.direction===dir});var w=tr.filter(function(t){return parseFloat(getR(t).actualPct)>0}).length;return{total:tr.length,wins:w,losses:tr.length-w,wr:tr.length?Math.round(w/tr.length*100):0,pnl:tr.reduce(function(s,t){return s+pnl(t)},0)}};
-  return{tot:tot,wins:wins,losses:losses,winRate:tot?Math.round(wins/tot*100):0,gp:gp,gl:gl,np:np,pf:pf,best:best===-Infinity?0:best,worst:worst===Infinity?0:worst,exp:exp,equity:equity,bal:bal,hwm:hwm,hwmDate:hwmDate,pnlHwm:bal-hwm,weekly:weekly,long:splitSt("BUY"),short:splitSt("SELL")};
+  return{tot:tot,wins:wins,losses:losses,winRate:tot?Math.round(wins/tot*100):0,gp:gp,gl:gl,np:np,pf:pf,best:best===-Infinity?0:best,worst:worst===Infinity?0:worst,exp:exp,equity:equity,bal:bal,hwm:hwm,hwmDate:hwmDate,pnlHwm:(bal-adjCum)-hwmNet,adjTotal:adjCum,weekly:weekly,long:splitSt("BUY"),short:splitSt("SELL")};
 }
 </script>
 
@@ -1525,14 +1540,18 @@ function FpOverview(props){
     merges=merges.concat(refresh);
     var leftover=manual.filter(function(t){return !usedM[t.id]});
     var leftSum=leftover.reduce(function(s2,t){return s2+(tradePnl(t,startBal,firm.id)||0)},0);
-    var adjSum=ex.deposits.slice().sort(function(a,b2){return String(a.time).localeCompare(String(b2.time))}).slice(1).reduce(function(s2,d){return s2+d.amount},0);
+    var adjAll=ex.deposits.slice().sort(function(a,b2){return String(a.time).localeCompare(String(b2.time))}).slice(1).filter(function(d){return d.time&&Math.abs(d.amount)>0.004});
+    var adjSum=adjAll.reduce(function(s2,d){return s2+d.amount},0);
+    var haveK={};(firm.balanceAdj||[]).forEach(function(a){haveK[a.key]=1});
+    var adjNew=adjAll.map(function(d){return{key:"mt5adj:"+firm.id+":"+d.time+":"+d.amount.toFixed(2),time:d.time,amount:d.amount,note:d.amount<0?"Withdrawal / correction":"Deposit / correction"}}).filter(function(a){return !haveK[a.key]});
+    var adjHaveSum=(firm.balanceAdj||[]).reduce(function(s2,a){return s2+(parseFloat(a.amount)||0)},0);
     b={trades:keepBuilt,dup:b.dup};
     var sumP=ex.recs.reduce(function(s2,r){return s2+r.profit},0),sumC=ex.recs.reduce(function(s2,r){return s2+r.comm},0),sumS=ex.recs.reduce(function(s2,r){return s2+r.swap},0);
     var wins=ex.recs.filter(function(r){return r.net>0}).length,net=ex.recs.reduce(function(s,r){return s+r.net},0);
     var times=ex.recs.map(function(r){return r.close}).sort();
     var dep=ex.deposits.filter(function(d){return d.amount>0}).sort(function(a,b2){return String(a.time).localeCompare(String(b2.time))})[0];
-    setImp({file:fileName,refreshN:refresh.length,sumP:sumP,sumC:sumC,sumS:sumS,merges:merges,leftover:leftover.length,leftSum:leftSum,adjSum:adjSum,newNet:b.trades.reduce(function(a,t){return a+(t.accountResults[String(firm.id)].pnlUsd||0)},0),built:b.trades,dup:b.dup,dropped:ex.dropped,total:ex.recs.length,wins:wins,net:net,from:times[0],to:times[times.length-1],deposit:dep?dep.amount:null});
-    setImpOpt({setBal:!!(dep&&Math.abs(dep.amount-startBal)>1),clearOv:firm.currentBalanceOverride!=null&&firm.currentBalanceOverride!==""});
+    setImp({file:fileName,refreshN:refresh.length,sumP:sumP,sumC:sumC,sumS:sumS,merges:merges,leftover:leftover.length,leftSum:leftSum,adjSum:adjSum,adjNew:adjNew,adjNewN:adjNew.length,adjHaveSum:adjHaveSum,newNet:b.trades.reduce(function(a,t){return a+(t.accountResults[String(firm.id)].pnlUsd||0)},0),built:b.trades,dup:b.dup,dropped:ex.dropped,total:ex.recs.length,wins:wins,net:net,from:times[0],to:times[times.length-1],deposit:dep?dep.amount:null});
+    setImpOpt({adj:true,setBal:!!(dep&&Math.abs(dep.amount-startBal)>1),clearOv:firm.currentBalanceOverride!=null&&firm.currentBalanceOverride!==""});
   };
   var onFile=function(e){
     var f=e.target.files&&e.target.files[0];if(!f)return;
@@ -1559,11 +1578,13 @@ function FpOverview(props){
     var doMerge=imp.merges.filter(function(m){return m.r||impOpt.merge!==false});
     var patch={};
     var actM=imp.merges.filter(function(m){return m.r||impOpt.merge!==false});
-    if(!imp.built.length&&!actM.length)return;
+    var adjOn=impOpt.adj!==false&&imp.adjNew&&imp.adjNew.length>0;
+    if(!imp.built.length&&!actM.length&&!adjOn)return;
     if(impOpt.setBal&&imp.deposit)patch.accountSize=imp.deposit;
     if(impOpt.clearOv)patch.currentBalanceOverride=null;
+    if(adjOn)patch.balanceAdj=(firm.balanceAdj||[]).concat(imp.adjNew);
     onImport(imp.built,patch,doMerge,firm.id);
-    setImpMsg("Imported "+imp.built.length+" trades"+(doMerge.length?", matched "+doMerge.length+" you had already logged by hand (their result now uses the exact MT5 numbers)":"")+(imp.dup?" ("+imp.dup+" already in the journal were skipped)":"")+".");
+    setImpMsg("Imported "+imp.built.length+" trades"+(doMerge.length?", matched "+doMerge.length+" you had already logged by hand (their result now uses the exact MT5 numbers)":"")+(adjOn?"; "+imp.adjNew.length+" withdrawal/correction row(s) totalling "+fpM(imp.adjNew.reduce(function(s2,a){return s2+a.amount},0))+" now count in the balance":"")+(imp.dup?" ("+imp.dup+" already in the journal were skipped)":"")+".");
     setImp(null);
   };
 
@@ -1585,6 +1606,7 @@ function FpOverview(props){
         h("div",{style:{fontWeight:700,marginBottom:4}},"Import MT5 / MT4 history into "+firm.name),
         h("div",{style:{color:"#555",marginBottom:8}},"MT5: Toolbox → History → set period to All history → right-click → choose Positions → right-click → Report → HTML (or Open XML). MT4: Account History → right-click → Save as Detailed Report. CSV also works. Upload the file below — every closed trade is added with its exact profit, commission and swap. Re-importing the same file skips trades already added."),
         h("input",{type:"file",accept:".html,.htm,.csv,.txt,.xlsx,.xls",onChange:onFile,style:{fontFamily:FP_F,fontSize:12}}),
+        (firm.balanceAdj&&firm.balanceAdj.length>0)&&h("div",{style:{marginTop:8,color:"#14532d"}},"Withdrawals/corrections counted in this account's balance: "+firm.balanceAdj.length+" ("+fpM(firm.balanceAdj.reduce(function(s2,a){return s2+(parseFloat(a.amount)||0)},0))+") ",h("button",{onClick:function(){if(window.confirm("Stop counting these withdrawals in the balance? You can bring them back by importing the MT5 report again."))onUpdate(firm.id,{balanceAdj:[]})},style:{marginLeft:6,fontFamily:FP_F,fontSize:11,padding:"2px 9px",borderRadius:7,border:"1px solid #dcdcdc",background:"#fff",color:"#333",cursor:"pointer"}},"Clear")),
         impErr&&h("div",{style:{color:"#dc2626",marginTop:8}},impErr),
         impMsg&&h("div",{style:{color:"#059669",marginTop:8,fontWeight:600}},impMsg),
         imp&&h("div",{style:{marginTop:10,background:"#fff",border:"1px solid #e6e6e6",borderRadius:10,padding:12}},
@@ -1594,14 +1616,15 @@ function FpOverview(props){
           h("div",{style:{marginTop:2}},"In this file: profit "+fpM(imp.sumP)+" + commission "+fpM(imp.sumC)+" + swap "+fpM(imp.sumS)+" = ",h("b",null,fpM(imp.sumP+imp.sumC+imp.sumS)),h("span",{style:{color:"#777"}}," (compare with the totals at the bottom of your MT5 report)")),
           imp.refreshN>0&&h("div",{style:{marginTop:6,padding:8,background:"#eef7f1",borderRadius:8,color:"#14532d"}},imp.refreshN+" trade(s) imported earlier have different numbers in this file (swap / commission / close time). They will be corrected when you press the button below."),
           h("div",null,"Wins "+imp.wins+" · Losses "+(imp.total-imp.wins)+" · Net result (profit + commission + swap): ",h("b",{style:{color:imp.net>=0?"#059669":"#dc2626"}},fpM(imp.net))),
-          h("div",null,"Balance after import: ",h("b",null,fpM((impOpt.setBal&&imp.deposit?imp.deposit:startBal)+imp.newNet+(cl.reduce(function(s,c){return s+c.pnl},0))+imp.merges.filter(function(m){return m.r||impOpt.merge!==false}).reduce(function(s2,m){return s2+(parseFloat(m.res.pnlUsd)||0)-m.old},0))),h("span",{style:{color:"#777"}}," (starting balance + all trades in the journal)")),
+          h("div",null,"Balance after import: ",h("b",null,fpM((impOpt.setBal&&imp.deposit?imp.deposit:startBal)+imp.newNet+(cl.reduce(function(s,c){return s+c.pnl},0))+imp.merges.filter(function(m){return m.r||impOpt.merge!==false}).reduce(function(s2,m){return s2+(parseFloat(m.res.pnlUsd)||0)-m.old},0)+imp.adjHaveSum+((impOpt.adj!==false&&imp.adjNew)?imp.adjNew.reduce(function(s2,a){return s2+a.amount},0):0))),h("span",{style:{color:"#777"}}," (starting balance + all trades + withdrawals/corrections)")),
           (imp.merges.length-(imp.refreshN||0))>0&&h("label",{style:{display:"block",marginTop:8,padding:8,background:"#eef7f1",borderRadius:8}},h("input",{type:"checkbox",checked:impOpt.merge!==false,onChange:function(e){var v=e.target.checked;setImpOpt(function(p){return Object.assign({},p,{merge:v})})}})," "+(imp.merges.length-(imp.refreshN||0))+" of these MT5 trades are already in your journal (logged by hand). Update those with the exact MT5 result instead of adding them a second time — this is the usual cause of the journal balance being higher/lower than MT5. Your notes, photos and tags are kept."),
           imp.leftover>0&&h("div",{style:{marginTop:8,padding:8,background:"#fdf1e3",borderRadius:8,color:"#7a4a0a"}},"⚠ "+imp.leftover+" other trade(s) in the journal for this account are not in the MT5 file ("+fpM(imp.leftSum)+" counted in the balance). If MT5 does not show them, delete them or they will keep the journal off from MT5."),
-          Math.abs(imp.adjSum)>0.005&&h("div",{style:{marginTop:8,padding:8,background:"#fdf1e3",borderRadius:8,color:"#7a4a0a"}},"⚠ The MT5 report has deposits/withdrawals/balance corrections after the first deposit totalling "+fpM(imp.adjSum)+". MT5 balance includes these, the journal does not — add them to the account balance override if they are real."),
+          imp.adjNewN>0&&h("label",{style:{display:"block",marginTop:8,padding:8,background:"#eef7f1",borderRadius:8,color:"#14532d"}},h("input",{type:"checkbox",checked:impOpt.adj!==false,onChange:function(e){var v=e.target.checked;setImpOpt(function(p){return Object.assign({},p,{adj:v})})}})," "+imp.adjNewN+" withdrawal/balance-correction row(s) found in the MT5 report, totalling "+fpM(imp.adjNew.reduce(function(s2,a){return s2+a.amount},0))+" (e.g. payouts taken out of the account). Subtract them from the journal balance so it matches MT5. This does not touch your trades or the Payouts page."),
+          (imp.adjNewN===0&&Math.abs(imp.adjSum)>0.005)&&h("div",{style:{marginTop:8,padding:8,background:"#eef7f1",borderRadius:8,color:"#14532d"}},"✓ The withdrawals/corrections in this report ("+fpM(imp.adjSum)+") are already counted in this account's balance."),
           imp.deposit!=null&&h("label",{style:{display:"block",marginTop:8}},h("input",{type:"checkbox",checked:impOpt.setBal,onChange:function(e){var v=e.target.checked;setImpOpt(function(p){return Object.assign({},p,{setBal:v})})}})," Set starting balance to the report's first deposit ("+fpM(imp.deposit)+")"),
           firm.currentBalanceOverride!=null&&firm.currentBalanceOverride!==""&&h("label",{style:{display:"block",marginTop:4}},h("input",{type:"checkbox",checked:impOpt.clearOv,onChange:function(e){var v=e.target.checked;setImpOpt(function(p){return Object.assign({},p,{clearOv:v})})}})," Clear the manual balance override so the imported numbers show"),
           h("div",{style:{fontSize:10,color:"#777",marginTop:8}},"Times are kept exactly as MT5 shows them (broker time, "+fpOffLabel(firm)+"). Sessions are worked out from that offset. R-multiples are estimated from the stop-loss distance when possible."),
-          h("button",{onClick:doImport,disabled:!(imp.built.length||imp.merges.some(function(m){return m.r||impOpt.merge!==false})),style:{marginTop:10,fontFamily:FP_F,fontSize:12,padding:"9px 18px",borderRadius:10,border:"none",background:(imp.built.length||imp.merges.some(function(m){return m.r||impOpt.merge!==false}))?"#111":"#bbb",color:"#fff",cursor:"pointer"}},imp.built.length?"Import "+imp.built.length+" trades"+(imp.merges.length?" + update "+imp.merges.filter(function(m){return m.r||impOpt.merge!==false}).length:""):(imp.merges.filter(function(m){return m.r||impOpt.merge!==false}).length?"Update "+imp.merges.filter(function(m){return m.r||impOpt.merge!==false}).length+" trades":"Nothing new to import")))),
+          h("button",{onClick:doImport,disabled:!(imp.built.length||imp.merges.some(function(m){return m.r||impOpt.merge!==false})||(impOpt.adj!==false&&imp.adjNewN>0)),style:{marginTop:10,fontFamily:FP_F,fontSize:12,padding:"9px 18px",borderRadius:10,border:"none",background:(imp.built.length||imp.merges.some(function(m){return m.r||impOpt.merge!==false})||(impOpt.adj!==false&&imp.adjNewN>0))?"#111":"#bbb",color:"#fff",cursor:"pointer"}},imp.built.length?"Import "+imp.built.length+" trades"+(imp.merges.length?" + update "+imp.merges.filter(function(m){return m.r||impOpt.merge!==false}).length:""):(imp.merges.filter(function(m){return m.r||impOpt.merge!==false}).length?"Update "+imp.merges.filter(function(m){return m.r||impOpt.merge!==false}).length+" trades":((impOpt.adj!==false&&imp.adjNewN>0)?"Apply "+imp.adjNewN+" withdrawal(s) to balance":"Nothing new to import"))))),
       showCred&&h("div",{style:{marginTop:12,padding:12,background:"#f7f7f7",borderRadius:10,fontFamily:FP_F,fontSize:12,color:"#333"}},
         (firm.login||firm.server||firm.platform)?h("div",null,kv("Login",firm.login||"–"),kv("Server",firm.server||"–"),kv("Platform",firm.platform||"–")):"No credentials saved. Use Account details to add login and server.",
         h("div",{style:{fontSize:10,color:"#777",marginTop:6}},"Passwords are intentionally not stored in the journal.")),
@@ -6268,6 +6291,7 @@ function RestoreModal(props){
 function App(){
   var trState=useState([]);var trades=trState[0],setTrades=trState[1];
   var fiState=useState(DEF_FIRMS);var firms=fiState[0],setFirms=fiState[1];
+  window.NBS_ADJ=(function(){var m={};(firms||[]).forEach(function(f){if(f&&f.balanceAdj&&f.balanceAdj.length)m[f.id]=f.balanceAdj});return m})();
   var ruState=useState(DEF_RULES);var rules=ruState[0],setRules=ruState[1];
   var pgState=useState("journal");var page=pgState[0],setPage=pgState[1];
   var jumpState=useState(null);var jumpTradeId=jumpState[0],setJumpTradeId=jumpState[1];
@@ -6431,7 +6455,7 @@ function App(){
   function addTrade(t){setTrades(function(p){return [t].concat(p)})}
   function updateTrade(id,data){setTrades(function(p){return p.map(function(t){return t.id===id?Object.assign({},t,data):t})})}
   function deleteTrade(id){if(window.confirm("Delete this trade?"))setTrades(function(p){return p.filter(function(t){return t.id!==id})})}
-  function importTrades(list,patch,merges,mfid){var mm={};(merges||[]).forEach(function(m){mm[m.id]=m});setTrades(function(p){return list.concat(p.map(function(t){var m=mm[t.id];if(!m)return t;var ar=Object.assign({},t.accountResults||{});ar[String(mfid)]=m.res;return Object.assign({},t,{accountResults:ar,importKey:t.importKey||m.importKey})}))});if(patch&&Object.keys(patch).length&&(list.length||(merges||[]).length)){var fid=list.length?list[0].firmIds[0]:mfid;setFirms(function(p){return p.map(function(f){return f.id===fid?Object.assign({},f,patch):f})})}}
+  function importTrades(list,patch,merges,mfid){var mm={};(merges||[]).forEach(function(m){mm[m.id]=m});setTrades(function(p){return list.concat(p.map(function(t){var m=mm[t.id];if(!m)return t;var ar=Object.assign({},t.accountResults||{});ar[String(mfid)]=m.res;return Object.assign({},t,{accountResults:ar,importKey:t.importKey||m.importKey})}))});if(patch&&Object.keys(patch).length&&(list.length||(merges||[]).length||patch.balanceAdj)){var fid=list.length?list[0].firmIds[0]:mfid;setFirms(function(p){return p.map(function(f){return f.id===fid?Object.assign({},f,patch):f})})}}
   function addFirm(f){setFirms(function(p){return p.concat([f])})}
   function updateFirm(id,data){setFirms(function(p){return p.map(function(f){return f.id===id?Object.assign({},f,data):f})})}
   function deleteFirm(id){setFirms(function(p){return p.filter(function(f){return f.id!==id})});setTrades(function(p){return p.map(function(t){return Object.assign({},t,{firmIds:(t.firmIds||[]).filter(function(x){return x!==id})})})})}
