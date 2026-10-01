@@ -1496,6 +1496,16 @@ function FpOverview(props){
     if(!ex.recs.length){setImpErr("No closed positions found in this file. In MT5 open Toolbox → History, set period to All history, right-click → choose Positions (not Deals/Orders), then right-click → Report → HTML (or Open XML) and upload that file.");return}
     var existing={};allTrades.forEach(function(t){if(t.importKey)existing[t.importKey]=1});
     var b=fpBuildTrades(ex.recs,firm,startBal,existing);
+    // Trades imported earlier are normally skipped, which kept OLD numbers (e.g. swap that grew after the first import). Refresh them.
+    var fresh=fpBuildTrades(ex.recs,firm,startBal,{}).trades,refresh=[];
+    fresh.forEach(function(nt){
+      if(!existing[nt.importKey])return;
+      var old=null;allTrades.forEach(function(t){if(t.importKey===nt.importKey)old=t});
+      if(!old)return;
+      var nr=nt.accountResults[String(firm.id)],orr=getAccRes(old,firm.id);
+      var np=parseFloat(nr.pnlUsd),op2=parseFloat(orr.pnlUsd);
+      if(isNaN(op2)||Math.abs(np-op2)>0.004||String(orr.exitTimestamp||"")!==String(nr.exitTimestamp||""))refresh.push({r:true,id:old.id,importKey:nt.importKey,res:Object.assign({},orr,nr),old:isNaN(op2)?(tradePnl(old,startBal,firm.id)||0):op2});
+    });
     // Match MT5 trades to trades already logged by hand, so they are not counted twice
     var manual=firmTrades.filter(function(t){if((t.importKey&&String(t.importKey).indexOf("mt5:"+firm.id+":")===0)||t.tradeStatus==="SKIPPED")return false;var rr=getAccRes(t,firm.id);return rr&&rr.outcome&&!rr.outcome.includes("Running")&&rr.actualPct!==""&&rr.actualPct!=null&&!isNaN(parseFloat(rr.actualPct))});
     var usedM={},merges=[],keepBuilt=[];
@@ -1512,15 +1522,16 @@ function FpOverview(props){
       if(hit){usedM[hit.id]=1;merges.push({id:hit.id,importKey:nt.importKey,res:nt.accountResults[String(firm.id)],lots:nt.lots,old:tradePnl(hit,startBal,firm.id)||0})}
       else keepBuilt.push(nt);
     });
+    merges=merges.concat(refresh);
     var leftover=manual.filter(function(t){return !usedM[t.id]});
     var leftSum=leftover.reduce(function(s2,t){return s2+(tradePnl(t,startBal,firm.id)||0)},0);
     var adjSum=ex.deposits.slice().sort(function(a,b2){return String(a.time).localeCompare(String(b2.time))}).slice(1).reduce(function(s2,d){return s2+d.amount},0);
     b={trades:keepBuilt,dup:b.dup};
-    var allNet=ex.recs.reduce(function(s2,r){return s2+r.net},0);
+    var sumP=ex.recs.reduce(function(s2,r){return s2+r.profit},0),sumC=ex.recs.reduce(function(s2,r){return s2+r.comm},0),sumS=ex.recs.reduce(function(s2,r){return s2+r.swap},0);
     var wins=ex.recs.filter(function(r){return r.net>0}).length,net=ex.recs.reduce(function(s,r){return s+r.net},0);
     var times=ex.recs.map(function(r){return r.close}).sort();
     var dep=ex.deposits.filter(function(d){return d.amount>0}).sort(function(a,b2){return String(a.time).localeCompare(String(b2.time))})[0];
-    setImp({file:fileName,merges:merges,leftover:leftover.length,leftSum:leftSum,adjSum:adjSum,newNet:b.trades.reduce(function(a,t){return a+(t.accountResults[String(firm.id)].pnlUsd||0)},0),built:b.trades,dup:b.dup,dropped:ex.dropped,total:ex.recs.length,wins:wins,net:net,from:times[0],to:times[times.length-1],deposit:dep?dep.amount:null});
+    setImp({file:fileName,refreshN:refresh.length,sumP:sumP,sumC:sumC,sumS:sumS,merges:merges,leftover:leftover.length,leftSum:leftSum,adjSum:adjSum,newNet:b.trades.reduce(function(a,t){return a+(t.accountResults[String(firm.id)].pnlUsd||0)},0),built:b.trades,dup:b.dup,dropped:ex.dropped,total:ex.recs.length,wins:wins,net:net,from:times[0],to:times[times.length-1],deposit:dep?dep.amount:null});
     setImpOpt({setBal:!!(dep&&Math.abs(dep.amount-startBal)>1),clearOv:firm.currentBalanceOverride!=null&&firm.currentBalanceOverride!==""});
   };
   var onFile=function(e){
@@ -1545,9 +1556,10 @@ function FpOverview(props){
   };
   var doImport=function(){
     if(!imp||!onImport)return;
-    var doMerge=impOpt.merge!==false?imp.merges:[];
+    var doMerge=imp.merges.filter(function(m){return m.r||impOpt.merge!==false});
     var patch={};
-    if(!imp.built.length&&!(impOpt.merge&&imp.merges.length))return;
+    var actM=imp.merges.filter(function(m){return m.r||impOpt.merge!==false});
+    if(!imp.built.length&&!actM.length)return;
     if(impOpt.setBal&&imp.deposit)patch.accountSize=imp.deposit;
     if(impOpt.clearOv)patch.currentBalanceOverride=null;
     onImport(imp.built,patch,doMerge,firm.id);
@@ -1579,15 +1591,17 @@ function FpOverview(props){
           h("div",{style:{fontWeight:700,marginBottom:6}},"Preview — "+imp.file),
           h("div",null,imp.total+" closed positions found · "+imp.built.length+" new"+(imp.dup?" · "+imp.dup+" already imported":"")+(imp.dropped?" · "+imp.dropped+" rows skipped (unreadable)":"")),
           h("div",null,"Period: "+fpDT(imp.from)+" → "+fpDT(imp.to)),
+          h("div",{style:{marginTop:2}},"In this file: profit "+fpM(imp.sumP)+" + commission "+fpM(imp.sumC)+" + swap "+fpM(imp.sumS)+" = ",h("b",null,fpM(imp.sumP+imp.sumC+imp.sumS)),h("span",{style:{color:"#777"}}," (compare with the totals at the bottom of your MT5 report)")),
+          imp.refreshN>0&&h("div",{style:{marginTop:6,padding:8,background:"#eef7f1",borderRadius:8,color:"#14532d"}},imp.refreshN+" trade(s) imported earlier have different numbers in this file (swap / commission / close time). They will be corrected when you press the button below."),
           h("div",null,"Wins "+imp.wins+" · Losses "+(imp.total-imp.wins)+" · Net result (profit + commission + swap): ",h("b",{style:{color:imp.net>=0?"#059669":"#dc2626"}},fpM(imp.net))),
-          h("div",null,"Balance after import: ",h("b",null,fpM((impOpt.setBal&&imp.deposit?imp.deposit:startBal)+imp.newNet+(cl.reduce(function(s,c){return s+c.pnl},0))+(impOpt.merge!==false?imp.merges.reduce(function(s2,m){return s2+(parseFloat(m.res.pnlUsd)||0)-m.old},0):0))),h("span",{style:{color:"#777"}}," (starting balance + all trades in the journal)")),
-          imp.merges.length>0&&h("label",{style:{display:"block",marginTop:8,padding:8,background:"#eef7f1",borderRadius:8}},h("input",{type:"checkbox",checked:impOpt.merge!==false,onChange:function(e){var v=e.target.checked;setImpOpt(function(p){return Object.assign({},p,{merge:v})})}})," "+imp.merges.length+" of these MT5 trades are already in your journal (logged by hand). Update those with the exact MT5 result instead of adding them a second time — this is the usual cause of the journal balance being higher/lower than MT5. Your notes, photos and tags are kept."),
+          h("div",null,"Balance after import: ",h("b",null,fpM((impOpt.setBal&&imp.deposit?imp.deposit:startBal)+imp.newNet+(cl.reduce(function(s,c){return s+c.pnl},0))+imp.merges.filter(function(m){return m.r||impOpt.merge!==false}).reduce(function(s2,m){return s2+(parseFloat(m.res.pnlUsd)||0)-m.old},0))),h("span",{style:{color:"#777"}}," (starting balance + all trades in the journal)")),
+          (imp.merges.length-(imp.refreshN||0))>0&&h("label",{style:{display:"block",marginTop:8,padding:8,background:"#eef7f1",borderRadius:8}},h("input",{type:"checkbox",checked:impOpt.merge!==false,onChange:function(e){var v=e.target.checked;setImpOpt(function(p){return Object.assign({},p,{merge:v})})}})," "+(imp.merges.length-(imp.refreshN||0))+" of these MT5 trades are already in your journal (logged by hand). Update those with the exact MT5 result instead of adding them a second time — this is the usual cause of the journal balance being higher/lower than MT5. Your notes, photos and tags are kept."),
           imp.leftover>0&&h("div",{style:{marginTop:8,padding:8,background:"#fdf1e3",borderRadius:8,color:"#7a4a0a"}},"⚠ "+imp.leftover+" other trade(s) in the journal for this account are not in the MT5 file ("+fpM(imp.leftSum)+" counted in the balance). If MT5 does not show them, delete them or they will keep the journal off from MT5."),
           Math.abs(imp.adjSum)>0.005&&h("div",{style:{marginTop:8,padding:8,background:"#fdf1e3",borderRadius:8,color:"#7a4a0a"}},"⚠ The MT5 report has deposits/withdrawals/balance corrections after the first deposit totalling "+fpM(imp.adjSum)+". MT5 balance includes these, the journal does not — add them to the account balance override if they are real."),
           imp.deposit!=null&&h("label",{style:{display:"block",marginTop:8}},h("input",{type:"checkbox",checked:impOpt.setBal,onChange:function(e){var v=e.target.checked;setImpOpt(function(p){return Object.assign({},p,{setBal:v})})}})," Set starting balance to the report's first deposit ("+fpM(imp.deposit)+")"),
           firm.currentBalanceOverride!=null&&firm.currentBalanceOverride!==""&&h("label",{style:{display:"block",marginTop:4}},h("input",{type:"checkbox",checked:impOpt.clearOv,onChange:function(e){var v=e.target.checked;setImpOpt(function(p){return Object.assign({},p,{clearOv:v})})}})," Clear the manual balance override so the imported numbers show"),
           h("div",{style:{fontSize:10,color:"#777",marginTop:8}},"Times are kept exactly as MT5 shows them (broker time, "+fpOffLabel(firm)+"). Sessions are worked out from that offset. R-multiples are estimated from the stop-loss distance when possible."),
-          h("button",{onClick:doImport,disabled:!(imp.built.length||(imp.merges.length&&impOpt.merge!==false)),style:{marginTop:10,fontFamily:FP_F,fontSize:12,padding:"9px 18px",borderRadius:10,border:"none",background:(imp.built.length||(imp.merges.length&&impOpt.merge!==false))?"#111":"#bbb",color:"#fff",cursor:"pointer"}},imp.built.length?"Import "+imp.built.length+" trades":(imp.merges.length&&impOpt.merge!==false?"Update "+imp.merges.length+" logged trades":"Nothing new to import")))),
+          h("button",{onClick:doImport,disabled:!(imp.built.length||imp.merges.some(function(m){return m.r||impOpt.merge!==false})),style:{marginTop:10,fontFamily:FP_F,fontSize:12,padding:"9px 18px",borderRadius:10,border:"none",background:(imp.built.length||imp.merges.some(function(m){return m.r||impOpt.merge!==false}))?"#111":"#bbb",color:"#fff",cursor:"pointer"}},imp.built.length?"Import "+imp.built.length+" trades"+(imp.merges.length?" + update "+imp.merges.filter(function(m){return m.r||impOpt.merge!==false}).length:""):(imp.merges.filter(function(m){return m.r||impOpt.merge!==false}).length?"Update "+imp.merges.filter(function(m){return m.r||impOpt.merge!==false}).length+" trades":"Nothing new to import")))),
       showCred&&h("div",{style:{marginTop:12,padding:12,background:"#f7f7f7",borderRadius:10,fontFamily:FP_F,fontSize:12,color:"#333"}},
         (firm.login||firm.server||firm.platform)?h("div",null,kv("Login",firm.login||"–"),kv("Server",firm.server||"–"),kv("Platform",firm.platform||"–")):"No credentials saved. Use Account details to add login and server.",
         h("div",{style:{fontSize:10,color:"#777",marginTop:6}},"Passwords are intentionally not stored in the journal.")),
@@ -2566,6 +2580,8 @@ function newsLoadFeed(name,force){
     [FF,false]
   ];
   var errs=[];
+  var relay=null;try{var rl=localStorage.getItem("nbs_news_relay");if(rl)relay=rl;else{var sb=JSON.parse(localStorage.getItem("nbs9_sb")||"null");if(sb&&sb.url)relay=String(sb.url).replace(/\/$/,"")+"/functions/v1/ffnews"}}catch(e){}
+  if(relay)tries.unshift([relay+(relay.indexOf("?")>=0?"&":"?")+"name="+name,false]);
   return tries.reduce(function(p,t){return p.catch(function(e){if(e)errs.push(e.message);return newsFetchJson(t[0],t[1],9000)})},Promise.reject(null))
     .then(function(v){try{localStorage.setItem(ck,JSON.stringify({at:Date.now(),data:v}))}catch(e){}return v})
     .catch(function(e){errs.push(e&&e.message);if(cached)return cached.data;throw new Error(errs.filter(Boolean).slice(-4).join(" / ")||"network blocked")});
