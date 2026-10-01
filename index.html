@@ -2540,25 +2540,35 @@ function newsFetchJson(url,isAO,ms){
   var timer=setTimeout(function(){if(ctl)ctl.abort()},ms||9000);
   var race=new Promise(function(_,rej){setTimeout(function(){rej(new Error("timeout"))},(ms||9000)+500)});
   var req=fetch(url,{cache:"no-store",signal:ctl?ctl.signal:undefined})
-    .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json()})
-    .then(function(data){
+    .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text()})
+    .then(function(txt){
+      var data;
+      try{data=JSON.parse(txt)}catch(e){throw new Error(/Request Denied|exceeded/i.test(txt)?"rate-limited by ForexFactory (max 2 requests / 5 min per IP)":"not JSON")}
       var arr=isAO?JSON.parse(data.contents):data;
       if(!Array.isArray(arr))throw new Error("unexpected data");
       return arr;
     });
   return Promise.race([req,race]).then(function(v){clearTimeout(timer);return v},function(e){clearTimeout(timer);throw e});
 }
-function newsLoadFeed(name){
+// ForexFactory allows only ~2 downloads / 5 min per IP and the file changes ~hourly, so cache each feed for 30 min.
+function newsLoadFeed(name,force){
+  var ck="nbs_news_feed_"+name,cached=null;
+  try{cached=JSON.parse(localStorage.getItem(ck)||"null")}catch(e){}
+  var age=cached?Date.now()-cached.at:1e12;
+  if(cached&&age<(force?5:30)*60000)return Promise.resolve(cached.data);
   var FF="https://nfs.faireconomy.media/ff_calendar_"+name+".json";
   var tries=[
-    [FF,false],
+    ["https://api.allorigins.win/raw?url="+encodeURIComponent(FF),false],
     ["https://corsproxy.io/?url="+encodeURIComponent(FF),false],
+    ["https://thingproxy.freeboard.io/fetch/"+FF,false],
     ["https://api.allorigins.win/get?url="+encodeURIComponent(FF),true],
-    ["https://api.codetabs.com/v1/proxy?quest="+encodeURIComponent(FF),false]
+    ["https://api.codetabs.com/v1/proxy?quest="+encodeURIComponent(FF),false],
+    [FF,false]
   ];
   var errs=[];
   return tries.reduce(function(p,t){return p.catch(function(e){if(e)errs.push(e.message);return newsFetchJson(t[0],t[1],9000)})},Promise.reject(null))
-    .catch(function(e){errs.push(e&&e.message);throw new Error(errs.filter(Boolean).slice(-3).join(" / ")||"network blocked")});
+    .then(function(v){try{localStorage.setItem(ck,JSON.stringify({at:Date.now(),data:v}))}catch(e){}return v})
+    .catch(function(e){errs.push(e&&e.message);if(cached)return cached.data;throw new Error(errs.filter(Boolean).slice(-4).join(" / ")||"network blocked")});
 }
 function newsDayKey(d,tz){try{return d.toLocaleDateString("en-CA",tz&&tz!=="local"?{timeZone:tz}:undefined)}catch(e){return d.toISOString().slice(0,10)}}
 function newsImpactIcon(impact){
@@ -2594,10 +2604,11 @@ function ForexNews(){
   var nowS=useState(Date.now());var now=nowS[0],setNow=nowS[1];
   useEffect(function(){var id=setInterval(function(){setNow(Date.now())},60000);return function(){clearInterval(id)}},[]);
   useEffect(function(){try{localStorage.setItem(NEWS_PREF_KEY,JSON.stringify({tz:selTz,imp:imp,hidePast:hidePast,onlyRestricted:onlyRes,ins:ins,rc:rc}))}catch(e){}},[selTz,imp,hidePast,onlyRes,ins,rc]);
+  var forceRef=useRef(false);
   function load(){
     setLoading(true);setErr(null);setInfo("");
-    var a=newsLoadFeed("thisweek").then(function(v){return{ok:true,v:v}},function(e){return{ok:false,e:e}});
-    var b=newsLoadFeed("nextweek").then(function(v){return{ok:true,v:v}},function(e){return{ok:false,e:e}});
+    var a=newsLoadFeed("thisweek",forceRef.current).then(function(v){return{ok:true,v:v}},function(e){return{ok:false,e:e}});
+    var b=newsLoadFeed("nextweek",forceRef.current).then(function(v){return{ok:true,v:v}},function(e){return{ok:false,e:e}});
     Promise.all([a,b]).then(function(r){
       if(!r[0].ok&&!r[1].ok){
         var c=null;try{c=JSON.parse(localStorage.getItem(NEWS_CACHE_KEY)||"null")}catch(e){}
@@ -2645,7 +2656,7 @@ function ForexNews(){
       h("div",{style:{fontFamily:F2,fontSize:26,color:"#111111"}},"Economic Calendar"),
       h("div",{style:{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}},
         h("select",{value:selTz,onChange:function(e){setSelTz(e.target.value);setSelDayK(null)},style:Object.assign({},IS,{fontSize:11,padding:"5px 8px",height:32,width:"auto"})},NEWS_TZ_OPTIONS.map(function(o){return h("option",{key:o.value,value:o.value},o.label)})),
-        h("button",{onClick:load,disabled:loading,style:Object.assign({},BS,{padding:"6px 12px",fontSize:12,background:"#fff",border:"1px solid #dcdcdc",color:"#111"})},loading?"Loading…":"↻ Refresh"))),
+        h("button",{onClick:function(){forceRef.current=true;load()},disabled:loading,style:Object.assign({},BS,{padding:"6px 12px",fontSize:12,background:"#fff",border:"1px solid #dcdcdc",color:"#111"})},loading?"Loading…":"↻ Refresh"))),
     // week switch + day tabs
     h("div",{style:{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:10}},
       h("button",{onClick:function(){setWk(wk===0?1:0);setSelDayK(null)},style:Object.assign({},BS,{padding:"7px 12px",fontSize:12,background:"#fff",border:"1px solid #dcdcdc",color:"#111"})},wk===0?"Next week ›":"‹ This week"),
@@ -2677,7 +2688,7 @@ function ForexNews(){
       h("div",{style:{display:"flex",gap:6,flexWrap:"wrap"}},NEWS_CCY.map(function(x){var on=rc.ccy.indexOf(x)>=0;return h("label",{key:x,style:cbS(on,"#dc2626")},h("input",{type:"checkbox",checked:on,onChange:function(){setRc({imp:rc.imp,ccy:tg(rc.ccy,x)})}}),x)}))),
     info&&h("div",{style:{fontFamily:F2,fontSize:11,color:"#92400e",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:8,padding:"7px 10px",marginBottom:8}},info),
     loading&&h("div",{style:{textAlign:"center",padding:"36px 0",fontFamily:F2,fontSize:13,color:"#555"}},"Loading the calendar… (tries up to 4 sources, ~10 s each)"),
-    err&&h("div",{style:{background:"rgba(255,68,68,.05)",border:"1px solid rgba(255,68,68,.2)",borderRadius:8,padding:12,fontFamily:F2,fontSize:12,color:"#dc2626",display:"flex",gap:10,alignItems:"center",justifyContent:"space-between",flexWrap:"wrap"}},h("span",{style:{flex:1,minWidth:200}},err),h("button",{onClick:load,style:Object.assign({},BS,{padding:"7px 14px",fontSize:12,background:"#111",color:"#fff"})},"Retry")),
+    err&&h("div",{style:{background:"rgba(255,68,68,.05)",border:"1px solid rgba(255,68,68,.2)",borderRadius:8,padding:12,fontFamily:F2,fontSize:12,color:"#dc2626",display:"flex",gap:10,alignItems:"center",justifyContent:"space-between",flexWrap:"wrap"}},h("span",{style:{flex:1,minWidth:200}},err),h("button",{onClick:function(){forceRef.current=true;load()},style:Object.assign({},BS,{padding:"7px 14px",fontSize:12,background:"#111",color:"#fff"})},"Retry")),
     !loading&&!err&&h("div",{style:{background:"#fff",border:"1px solid #e6e6e6",borderRadius:10,overflowX:"auto"}},
       h("table",{style:{width:"100%",borderCollapse:"collapse",minWidth:760}},
         h("thead",null,h("tr",null,["Description","Instrument","Date / time","Actual","Forecast","Previous","Actions"].map(function(c){return h("th",{key:c,style:th},c)}))),
