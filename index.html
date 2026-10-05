@@ -1839,6 +1839,25 @@ function FpOverview(props){
     recon={jBal:jB,closedN:cN,diff:imp.mt5Balance!=null?jB-imp.mt5Balance:null,ok:imp.mt5Balance!=null&&Math.abs(jB-imp.mt5Balance)<0.015};
   }
 
+  var moneyEl=h("div",null,
+    h(FpCard,{title:"Payouts & Tier"},
+      h("div",{style:{display:"flex",gap:24,flexWrap:"wrap"}},
+        [["Tier",tier],["Reward Count",String(rewards.length)],["Rewards Amount",fpM(rwTotal)],["Highest Reward",fpM(rwMax)]].map(function(x){return h("div",{key:x[0]},h("div",{style:{fontFamily:FP_F,fontSize:11,color:"#666"}},x[0]),h("div",{style:{fontFamily:FP_F,fontSize:18,fontWeight:600,color:"#111",marginTop:3}},x[1]))})),
+      h("div",{style:{fontFamily:FP_F,fontSize:10,color:"#777",marginTop:8}},"Tier is a journal rating from total payouts: Silver $1k, Gold $5k, Platinum $20k. Add and edit payouts below, in the Payouts tab.")),
+    canOps?h(FpCard,{title:"Withdrawals & deposits (change the balance)"},
+      h("div",{style:{fontFamily:FP_F,fontSize:10,color:"#777",marginBottom:8}},"Money you took out or put in. It moves the current balance so the journal matches MT5. Importing an MT5 file fills these in automatically."),
+      (Array.isArray(firm.balanceOps)?firm.balanceOps:[]).filter(function(o){return !/initial/i.test(String(o.comment||""))}).map(function(o){
+        return h("div",{key:o.key,style:{display:"flex",justifyContent:"space-between",fontFamily:FP_F,fontSize:12,color:"#333",padding:"5px 0",borderTop:"1px solid #eee"}},
+          h("span",null,String(o.time||"").slice(0,10)+"  "+(o.comment||o.kind)+(o.kind==="credit"?"  (credit — not in balance)":"")),
+          h("span",{style:{color:o.amount<0?"#dc2626":"#059669"}},fpM(o.amount),h("button",{onClick:function(){onUpdate(firm.id,{balanceOps:firm.balanceOps.filter(function(x){return x.key!==o.key})})},style:{marginLeft:8,border:"none",background:"none",color:"#999",cursor:"pointer"}},"✕")))}),
+      h("div",{style:{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}},
+        h("input",{type:"date",value:wd.date,onChange:function(e){setWd(Object.assign({},wd,{date:e.target.value}))},style:Object.assign({},ib,{width:150})}),
+        h("select",{value:wd.kind,onChange:function(e){setWd(Object.assign({},wd,{kind:e.target.value}))},style:Object.assign({},ib,{width:140})},h("option",{value:"withdrawal"},"Withdrawal"),h("option",{value:"deposit"},"Deposit")),
+        h("input",{type:"number",placeholder:"Amount $",value:wd.amount,onChange:function(e){setWd(Object.assign({},wd,{amount:e.target.value}))},style:Object.assign({},ib,{width:130})}),
+        h("button",{onClick:function(){var a=Math.abs(parseFloat(wd.amount));if(!wd.date||isNaN(a)||a===0)return;var amt=wd.kind==="withdrawal"?-a:a;var op={key:wd.date+"T00:00|"+amt.toFixed(2)+"|Manual",time:wd.date+"T00:00",amount:amt,kind:"balance",comment:wd.kind==="withdrawal"?"Withdrawal (manual)":"Deposit (manual)"};onUpdate(firm.id,{balanceOps:(Array.isArray(firm.balanceOps)?firm.balanceOps:[]).concat([op])});setWd({date:"",kind:wd.kind,amount:""})},style:{fontFamily:FP_F,fontSize:12,padding:"7px 14px",borderRadius:8,border:"none",background:"#111",color:"#fff",cursor:"pointer"}},"Add"))
+    ):h("div",{style:{fontFamily:FP_F,fontSize:11,color:"#888",padding:"4px 2px"}},"Challenge / verification account — no withdrawals or deposits here (you can't take money out until it is funded).")
+  );
+  if(props.part==="money")return moneyEl;
   return h("div",{style:{marginBottom:14}},
     (breachedTotal||breachedDay||expired||breachedInact)&&alertBox("Account Rule Violation",breachedTotal?"Maximum loss limit exceeded.":breachedDay?"Maximum daily loss exceeded today.":breachedInact?"Maximum trading inactivity period exceeded — "+inact.days+" days without activity (limit "+inact.limit+").":"Maximum trading period exceeded — end date "+firm.endDate+".",true),
     disabled&&alertBox("Trading Disabled","Trading is disabled for this account (rule breached or marked Failed).",false),
@@ -1927,27 +1946,7 @@ function FpOverview(props){
         objBar(inact.limit>0?inact.days/inact.limit*100:0,inact.days>=inact.limit*0.8?"#dc2626":"#111"),
         h("div",{style:{fontFamily:FP_F,fontSize:10,color:"#777",marginTop:6}},"Days go back to 0 only when you open"+(firm.activityMode==="open"?"":" or close")+" a trade. Just holding a trade that is already running does not reset the count. Change the limit or rule under Account details."))
     ),
-    h(FpCard,{title:"Payouts & Tier"},
-      h("div",{style:{display:"flex",gap:24,flexWrap:"wrap",marginBottom:12}},
-        [["Tier",tier],["Reward Count",String(rewards.length)],["Rewards Amount",fpM(rwTotal)],["Highest Reward",fpM(rwMax)]].map(function(x){return h("div",{key:x[0]},h("div",{style:{fontFamily:FP_F,fontSize:11,color:"#666"}},x[0]),h("div",{style:{fontFamily:FP_F,fontSize:18,fontWeight:600,color:"#111",marginTop:3}},x[1]))})),
-      rewards.map(function(r){return h("div",{key:r.id,style:{display:"flex",justifyContent:"space-between",fontFamily:FP_F,fontSize:12,color:"#333",padding:"5px 0",borderTop:"1px solid #eee"}},h("span",null,r.date),h("span",null,fpM(parseFloat(r.amount)),h("button",{onClick:function(){delRw(r.id)},style:{marginLeft:10,border:"none",background:"none",color:"#999",cursor:"pointer"}},"✕")))}),
-      h("div",{style:{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}},
-        h("input",{type:"date",value:rw.date,onChange:function(e){setRw({date:e.target.value,amount:rw.amount})},style:Object.assign({},ib,{width:150})}),
-        h("input",{type:"number",placeholder:"Amount $",value:rw.amount,onChange:function(e){setRw({date:rw.date,amount:e.target.value})},style:Object.assign({},ib,{width:130})}),
-        h("button",{onClick:addRw,style:{fontFamily:FP_F,fontSize:12,padding:"7px 14px",borderRadius:8,border:"none",background:"#111",color:"#fff",cursor:"pointer"}},"Add payout")),
-      h("div",{style:{fontFamily:FP_F,fontSize:10,color:"#777",marginTop:8}},"Tier is a journal rating from total payouts: Silver $1k, Gold $5k, Platinum $20k.")),
-    canOps?h(FpCard,{title:"Withdrawals & deposits (change the balance)"},
-      h("div",{style:{fontFamily:FP_F,fontSize:10,color:"#777",marginBottom:8}},"Money you took out or put in. It moves the current balance so the journal matches MT5. Importing an MT5 file fills these in automatically."),
-      (Array.isArray(firm.balanceOps)?firm.balanceOps:[]).filter(function(o){return !/initial/i.test(String(o.comment||""))}).map(function(o){
-        return h("div",{key:o.key,style:{display:"flex",justifyContent:"space-between",fontFamily:FP_F,fontSize:12,color:"#333",padding:"5px 0",borderTop:"1px solid #eee"}},
-          h("span",null,String(o.time||"").slice(0,10)+"  "+(o.comment||o.kind)+(o.kind==="credit"?"  (credit — not in balance)":"")),
-          h("span",{style:{color:o.amount<0?"#dc2626":"#059669"}},fpM(o.amount),h("button",{onClick:function(){onUpdate(firm.id,{balanceOps:firm.balanceOps.filter(function(x){return x.key!==o.key})})},style:{marginLeft:8,border:"none",background:"none",color:"#999",cursor:"pointer"}},"✕")))}),
-      h("div",{style:{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}},
-        h("input",{type:"date",value:wd.date,onChange:function(e){setWd(Object.assign({},wd,{date:e.target.value}))},style:Object.assign({},ib,{width:150})}),
-        h("select",{value:wd.kind,onChange:function(e){setWd(Object.assign({},wd,{kind:e.target.value}))},style:Object.assign({},ib,{width:140})},h("option",{value:"withdrawal"},"Withdrawal"),h("option",{value:"deposit"},"Deposit")),
-        h("input",{type:"number",placeholder:"Amount $",value:wd.amount,onChange:function(e){setWd(Object.assign({},wd,{amount:e.target.value}))},style:Object.assign({},ib,{width:130})}),
-        h("button",{onClick:function(){var a=Math.abs(parseFloat(wd.amount));if(!wd.date||isNaN(a)||a===0)return;var amt=wd.kind==="withdrawal"?-a:a;var op={key:wd.date+"T00:00|"+amt.toFixed(2)+"|Manual",time:wd.date+"T00:00",amount:amt,kind:"balance",comment:wd.kind==="withdrawal"?"Withdrawal (manual)":"Deposit (manual)"};onUpdate(firm.id,{balanceOps:(Array.isArray(firm.balanceOps)?firm.balanceOps:[]).concat([op])});setWd({date:"",kind:wd.kind,amount:""})},style:{fontFamily:FP_F,fontSize:12,padding:"7px 14px",borderRadius:8,border:"none",background:"#111",color:"#fff",cursor:"pointer"}},"Add"))
-    ):h("div",{style:{fontFamily:FP_F,fontSize:11,color:"#888",padding:"4px 2px"}},"Challenge / verification account — no withdrawals or deposits here (you can't take money out until it is funded).")
+
   );
 }
 
@@ -2417,7 +2416,7 @@ function FirmDetail(props){
     ),
     tab==="calendar"&&h("div",{className:"fade"},h(FpCalendar,{trades:trades,firms:firms,fixedFirm:firm,onOpenTrade:function(t){setTradeDetail(t)}})),
     tab==="analytics"&&h(FpAnalytics,{cl:fpCl}),
-    tab==="payouts"&&h(FirmPayouts,{firm:firm,firms:firms,onUpdate:onUpdate}),
+    tab==="payouts"&&h("div",null,h(FirmPayouts,{firm:firm,firms:firms,onUpdate:onUpdate}),h(FpOverview,{firm:firm,cl:fpCl,startBal:startBal,bal:realCurrentBal,onUpdate:onUpdate,trades:trades,firmTrades:firmTrades,onImport:props.onImportTrades,part:"money"})),
     tab==="performance"&&h(PerformanceTab,{trades:firmTrades,startBal:startBal,firmId:firm.id,equity:journalStats.equity,firm:firm}),
     tab==="trades"&&h("div",{className:"fade"},
       h("div",{style:{fontFamily:"'DM Sans',sans-serif",fontSize:10,color:"#555",marginBottom:10}},firmTrades.length+" trades — click to open full detail · outcome is ",h("span",{style:{color:firm.color}},"independent per account")),
@@ -6923,7 +6922,28 @@ function BizAccounts(props){
   var s=bzStats(props.firms,props.biz,bzRate());
   var rowOf={};s.rows.forEach(function(x){rowOf[x.f.id]=x});
   var inp=function(f,k,ph,type,w){return h("input",{key:k+f.id+(f[k]||""),type:type||"text",inputMode:type==="number"?"decimal":undefined,defaultValue:f[k]==null?"":f[k],placeholder:ph||"",onBlur:function(e){var o={};o[k]=e.target.value.trim();if(o[k]===String(f[k]==null?"":f[k]))return;onUpdate(f.id,o)},style:Object.assign({},BZ_IN,{width:"100%"})})};
+  var impS=useState("");var impMsg=impS[0],setImpMsg=impS[1];
+  var doImport=function(e){
+    var file=e.target.files&&e.target.files[0];e.target.value="";if(!file)return;setImpMsg("Reading…");
+    bzReadXlsx(file,props.firms).then(function(o){
+      var np=Object.keys(o.patches).length;
+      var lines=["Accounts filled: "+np,"Payouts found: "+o.counts.pay,"Bank rows: "+o.counts.bank,"Expenditure rows: "+o.counts.exp].concat(o.notes).concat(o.unmatched.length?["NOT matched (no account with that number): "+o.unmatched.join(", ")]:[]);
+      if(!np&&!o.counts.pay&&!o.counts.bank&&!o.counts.exp){setImpMsg("Nothing to import. "+lines.join(" · "));return}
+      if(!window.confirm("Import from this Excel?\n\n"+lines.join("\n")+"\n\nThis fills the fields shown on the cards below. Nothing is deleted."))return setImpMsg("Cancelled.");
+      var ids={};Object.keys(o.patches).concat(Object.keys(o.pays)).forEach(function(k){ids[k]=1});
+      Object.keys(ids).forEach(function(k){var f=props.firms.find(function(x){return String(x.id)===k});if(!f)return;var d=Object.assign({},o.patches[k]||{});
+        if(o.pays[k]){var have=(f.rewards||[]).map(function(r){return(r.payoutId||"")+"|"+r.date});d.rewards=(f.rewards||[]).concat(o.pays[k].filter(function(r){return have.indexOf((r.payoutId||"")+"|"+r.date)<0}))}
+        onUpdate(f.id,d)});
+      if(o.counts.bank||o.counts.exp){var b=props.biz||BIZ0,hb=(b.bank||[]).map(function(x){return x.date+"|"+x.desc+"|"+x.inn+"|"+x.out}),he=(b.exp||[]).map(function(x){return x.date+"|"+x.item+"|"+x.amount});
+        props.setBiz(Object.assign({},b,{bank:(b.bank||[]).concat(o.bank.filter(function(x){return hb.indexOf(x.date+"|"+x.desc+"|"+x.inn+"|"+x.out)<0})),exp:(b.exp||[]).concat(o.exp.filter(function(x){return he.indexOf(x.date+"|"+x.item+"|"+x.amount)<0}))}))}
+      setImpMsg("Imported ✓ — "+lines.join(" · "));
+    }).catch(function(x){setImpMsg("Couldn't read that file: "+(x&&x.message?x.message:x))});
+  };
   return h("div",null,
+    h(FpCard,{title:"Import from your Excel"},
+      h("div",{style:{fontFamily:FP_F,fontSize:11,color:"#666",marginBottom:8}},"Pick your PropFirm Dashboard .xlsx. Accounts are matched by account number; eval cost, status, dates and risk are filled in, plus any payouts, bank rows and expenses you typed in it."),
+      h("input",{type:"file",accept:".xlsx",onChange:doImport,style:{fontFamily:FP_F,fontSize:12}}),
+      impMsg&&h("div",{style:{fontFamily:FP_F,fontSize:11,color:impMsg.indexOf("Couldn")===0?"#dc2626":"#059669",marginTop:8,whiteSpace:"pre-wrap"}},impMsg)),
     h("div",{style:{fontFamily:FP_F,fontSize:12,color:"#666",marginBottom:10}},"One card per account. If an account is blown, change its Status — don't delete it, so pass rate and P&L stay right. The account number, firm and size come from the Accounts page."),
     firms.map(function(f){var x=rowOf[f.id]||{};return h(FpCard,{key:f.id,title:f.name+(f.accountNo?" #"+f.accountNo:"")+(f.accountSize?" · $"+Number(f.accountSize).toLocaleString():"")},
       h("div",{style:{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}},
@@ -6989,7 +7009,7 @@ function BizHub(props){
     h(BizExportBar,{firms:firms,biz:biz}),
     tab==="payouts"&&h(PayoutsPage,{firms:firms,onUpdate:onUpdate,embedded:true}),
     tab==="dash"&&h(BizDashboard,{firms:firms,biz:biz}),
-    tab==="acc"&&h(BizAccounts,{firms:firms,biz:biz,onUpdate:onUpdate}),
+    tab==="acc"&&h(BizAccounts,{firms:firms,biz:biz,setBiz:setBiz,onUpdate:onUpdate}),
     tab==="bank"&&h(BizBank,{biz:biz,setBiz:setBiz}),
     tab==="exp"&&h(BizExpense,{biz:biz,setBiz:setBiz}));
 }
@@ -7058,6 +7078,73 @@ function FirmPayouts(props){
         (p.cut>0.005||r.note)&&h("div",{style:{fontSize:11,color:"#666",marginTop:3}},(p.cut>0.005?"Cut "+bzMoney(p.cut)+" ("+(p.sent>0?(p.cut/p.sent*100).toFixed(1):"0")+"%)":"")+(r.note?"   "+r.note:"")),
         h("div",{style:{marginTop:6}},h("button",{onClick:function(){var o=Object.assign({},openJ);o[k]=!o[k];setOpenJ(o)},style:BZ_GHOST},openJ[k]?"Hide journey ▴":"Journey ▾")),
         openJ[k]&&h(PayJourney,{f:f,r:r,patch:patch,rate:rate}))})));
+}
+
+// ── import from the PropFirm Dashboard .xlsx (Accounts / Payouts / Bank Transactions / Expenditure) ──
+function bzCellV(c){var v=c?c.value:null;if(v&&typeof v==="object"&&!(v instanceof Date)){if(v.result!==undefined)v=v.result;else if(v.richText)v=v.richText.map(function(t){return t.text}).join("");else if(v.text)v=v.text;else v=null}return v===undefined?null:v}
+function bzP2(n){return String(n).padStart(2,"0")}
+function bzParseDate(v){
+  if(v==null||v==="")return null;
+  if(v instanceof Date)return isNaN(v)?null:{iso:v.toISOString().slice(0,10),real:true};
+  var s=String(v).replace(/[ :]/g," ").trim();
+  var m=/(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})/.exec(s);if(m)return{iso:m[3]+"-"+bzP2(m[2])+"-"+bzP2(m[1]),real:false};
+  var m2=/(\d{4})-(\d{2})-(\d{2})/.exec(s);if(m2)return{iso:m2[0],real:false};
+  var d=new Date(s+" 12:00 UTC");return isNaN(d)?null:{iso:d.toISOString().slice(0,10),real:false};
+}
+function bzParseTime(v){if(v==null||v==="")return"";if(v instanceof Date)return bzP2(v.getUTCHours())+":"+bzP2(v.getUTCMinutes());if(typeof v==="number"){var m=Math.round((v%1)*1440);return bzP2(Math.floor(m/60)%24)+":"+bzP2(m%60)}var t=/(\d{1,2}):(\d{2})/.exec(String(v));return t?bzP2(t[1])+":"+t[2]:""}
+function bzId(v){return String(v==null?"":v).replace(/\D/g,"")}
+async function bzReadXlsx(file,firms){
+  await window.nbsEnsureExcel();
+  var wb=new ExcelJS.Workbook();await wb.xlsx.load(await file.arrayBuffer());
+  var out={patches:{},bank:[],exp:[],pays:{},notes:[],unmatched:[],counts:{acc:0,pay:0,bank:0,exp:0}};
+  var byNo={};firms.forEach(function(f){var k=bzId(f.accountNo);if(k)byNo[k]=f});
+  var wa=wb.getWorksheet("Accounts");
+  if(wa)for(var r=5;r<=wa.rowCount;r++){
+    var id=bzId(bzCellV(wa.getCell(r,1)));if(!id)continue;
+    var f=byNo[id];if(!f){out.unmatched.push("#"+id+" ("+(bzCellV(wa.getCell(r,2))||"")+")");continue}
+    var p=out.patches[f.id]||(out.patches[f.id]={});
+    var cost=bzCellV(wa.getCell(r,4)),re=bzCellV(wa.getCell(r,5)),rf=bzCellV(wa.getCell(r,6)),st=String(bzCellV(wa.getCell(r,7))||"").trim();
+    if(cost!=null&&cost!=="")p.evalCost=String(cost);
+    if(re!=null&&re!=="")p.riskEval=String(re);
+    if(rf!=null&&rf!=="")p.riskFunded=String(rf);
+    var ms=BIZ_STATUS.filter(function(x){return x.toLowerCase()===st.toLowerCase()})[0];if(ms)p.bizStatus=ms;
+    var d1=bzParseDate(bzCellV(wa.getCell(r,8))),d2=bzParseDate(bzCellV(wa.getCell(r,9))),d3=bzParseDate(bzCellV(wa.getCell(r,10))),k=bzCellV(wa.getCell(r,11));
+    if(d1&&d2&&typeof k==="number"&&k>0){
+      var A=bzD(d1.iso),B=bzD(d2.iso);
+      if(A&&B&&Math.abs((B-A)/86400000-k)>1&&d1.real){var mm=/^(\d{4})-(\d{2})-(\d{2})$/.exec(d1.iso);if(mm&&+mm[3]<=12){var sw=mm[1]+"-"+mm[3]+"-"+mm[2],A2=bzD(sw);if(A2&&Math.abs((B-A2)/86400000-k)<=1){d1={iso:sw,real:false};out.notes.push("#"+id+": purchase date read as day/month ("+sw+") so it matches your "+k+" days to fund")}}}
+    }
+    if(d1)p.datePurchased=d1.iso;if(d2)p.dateFunded=d2.iso;if(d3)p.dateClosed=d3.iso;
+    var nt=bzCellV(wa.getCell(r,15));if(nt)p.bizNotes=String(nt);
+    out.counts.acc++;
+  }
+  var wp=wb.getWorksheet("Payouts");
+  if(wp){var r2=6;while(r2<=wp.rowCount){
+    var no=bzCellV(wp.getCell(r2,2));
+    if(typeof no!=="number"){r2++;continue}
+    var rows=[];var q=r2;do{rows.push(q);q++}while(q<=wp.rowCount&&typeof bzCellV(wp.getCell(q,2))!=="number"&&q<r2+12);
+    var stages=[];rows.forEach(function(rr){
+      var stg=bzCellV(wp.getCell(rr,6)),dt=bzParseDate(bzCellV(wp.getCell(rr,7))),sent=bzCellV(wp.getCell(rr,9)),rec=bzCellV(wp.getCell(rr,10)),fx=bzCellV(wp.getCell(rr,13)),rise=bzCellV(wp.getCell(rr,15)),bk=bzCellV(wp.getCell(rr,16)),nt=bzCellV(wp.getCell(rr,19));
+      if(typeof nt==="string"&&/^Total time/.test(nt))nt=null;
+      if(!(dt||sent||rec||fx||rise||bk||nt))return;
+      stages.push({stage:stg?String(stg):"",date:dt?dt.iso:"",time:bzParseTime(bzCellV(wp.getCell(rr,8))),sent:sent!=null&&sent!==""?String(sent):"",received:rec!=null&&rec!==""?String(rec):"",fx:fx!=null&&fx!==""?String(fx):"",rise:rise?String(rise):"",bank:bk?String(bk):"",note:nt?String(nt):""});
+    });
+    var fm=byNo[bzId(bzCellV(wp.getCell(r2,4)))];
+    if(stages.length&&fm){var first=stages[0],amt=parseFloat(first.sent)||parseFloat(stages[stages.length-1].received)||0;(out.pays[fm.id]||(out.pays[fm.id]=[])).push({id:Date.now()+out.counts.pay,date:first.date||new Date().toISOString().slice(0,10),amount:amt,payoutId:String(bzCellV(wp.getCell(r2,3))||"").replace(/\s+/g," ").trim()||undefined,stages:stages});out.counts.pay++}
+    else if(stages.length)out.unmatched.push("payout row "+r2+" (account not found)");
+    r2=q;
+  }}
+  var wk=wb.getWorksheet("Bank Transactions");
+  if(wk)for(var r3=6;r3<=wk.rowCount;r3++){
+    var bd=bzParseDate(bzCellV(wk.getCell(r3,2)));if(!bd)continue;
+    var inn=bzCellV(wk.getCell(r3,7)),ou=bzCellV(wk.getCell(r3,8));if(!(parseFloat(inn)>0||parseFloat(ou)>0))continue;
+    out.bank.push({id:Date.now()+r3,date:bd.iso,time:bzParseTime(bzCellV(wk.getCell(r3,3))),type:String(bzCellV(wk.getCell(r3,4))||""),desc:String(bzCellV(wk.getCell(r3,5))||""),source:String(bzCellV(wk.getCell(r3,6))||""),inn:parseFloat(inn)>0?String(inn):"",out:parseFloat(ou)>0?String(ou):"",category:String(bzCellV(wk.getCell(r3,10))||""),notes:String(bzCellV(wk.getCell(r3,12))||"")});out.counts.bank++;
+  }
+  var we=wb.getWorksheet("Expenditure");
+  if(we)for(var r4=5;r4<=we.rowCount;r4++){
+    var ed=bzParseDate(bzCellV(we.getCell(r4,2))),it=bzCellV(we.getCell(r4,3)),am=bzCellV(we.getCell(r4,4));if(!ed||!it||!(parseFloat(am)>0))continue;
+    out.exp.push({id:Date.now()+1000+r4,date:ed.iso,item:String(it),amount:String(am),category:String(bzCellV(we.getCell(r4,5))||""),billing:String(bzCellV(we.getCell(r4,6))||""),status:String(bzCellV(we.getCell(r4,7))||""),notes:String(bzCellV(we.getCell(r4,8))||"")});out.counts.exp++;
+  }
+  return out;
 }
 
 function RestoreModal(props){
