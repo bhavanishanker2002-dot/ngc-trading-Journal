@@ -1913,8 +1913,9 @@ function FpCalendar(props){
     var d0=addDay(ck);d0.n++;d0.p+=r.pnl;d0.items.push(r);
     if(mode==="both"&&r.closed&&od){var ok=fpDayKey(od);if(ok!==ck){var d1=addDay(ok);d1.o++;d1.items.push(Object.assign({},r,{opened:true,pnl:0,d:od}))}}
   });
+  var spS=useState(function(){try{return localStorage.getItem("nbs_cal_pay")!=="0"}catch(e){return true}});var showPay=spS[0],setShowPay=spS[1];
   var payD={};
-  pool.forEach(function(f){if(activeFirm!=null&&f.id!==activeFirm)return;(Array.isArray(f.rewards)?f.rewards:[]).forEach(function(r){
+  pool.forEach(function(f){if(!showPay||(activeFirm!=null&&f.id!==activeFirm))return;(Array.isArray(f.rewards)?f.rewards:[]).forEach(function(r){
     var st=Array.isArray(r.stages)?r.stages:[];var add=function(dk,label,amt){if(!dk)return;(payD[dk]||(payD[dk]=[])).push({f:f,r:r,label:label,amt:amt})};
     var any=false;st.forEach(function(s){if(s.date){any=true;var a=parseFloat(s.received)>0?parseFloat(s.received):(parseFloat(s.sent)>0?parseFloat(s.sent):parseFloat(r.amount)||0);add(s.date,String(s.stage||"Payout").split(" — ")[0]+(s.stage&&s.stage.indexOf(" — ")>0?" · "+s.stage.split(" — ")[1]:""),a)}});
     if(!any)add(r.date,"Payout",parseFloat(r.amount)||0);
@@ -1942,7 +1943,8 @@ function FpCalendar(props){
     !fixed&&h("div",{style:{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}},chip("All accounts",null),firms.map(function(f){return chip(f.name,f.id,f.color)})),
     h("div",{style:{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:10}},
       h("span",{style:{fontFamily:FP_F,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:"#777",marginRight:4}},"Show trades on"),
-      [["both","Open + close day"],["close","Close day only"],["open","Open day only"]].map(function(o){var on=mode===o[0];return h("button",{key:o[0],onClick:function(){setMode(o[0]);setSelDay(null)},style:{fontFamily:FP_F,fontSize:11,padding:"5px 11px",borderRadius:999,border:"1px solid "+(on?"#111":"#dcdcdc"),background:on?"#111":"#fff",color:on?"#fff":"#333",cursor:"pointer"}},o[1])})),
+      [["both","Open + close day"],["close","Close day only"],["open","Open day only"]].map(function(o){var on=mode===o[0];return h("button",{key:o[0],onClick:function(){setMode(o[0]);setSelDay(null)},style:{fontFamily:FP_F,fontSize:11,padding:"5px 11px",borderRadius:999,border:"1px solid "+(on?"#111":"#dcdcdc"),background:on?"#111":"#fff",color:on?"#fff":"#333",cursor:"pointer"}},o[1])}),
+      h("button",{onClick:function(){var v=!showPay;setShowPay(v);setSelDay(null);try{localStorage.setItem("nbs_cal_pay",v?"1":"0")}catch(e){}},style:{fontFamily:FP_F,fontSize:11,padding:"5px 11px",borderRadius:999,border:"1px solid "+(showPay?"#e0b84a":"#dcdcdc"),background:showPay?"#fff8e1":"#fff",color:showPay?"#8a6d00":"#777",cursor:"pointer",marginLeft:8}},"💰 Payouts: "+(showPay?"ON":"OFF"))),
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginBottom:10}},
       h("div",{style:{display:"flex",alignItems:"center",gap:8}},nb("‹",function(){shift(-1)}),h("span",{style:{fontFamily:FP_F,fontSize:16,fontWeight:600,minWidth:130,textAlign:"center"}},MN[month]+" "+year),nb("›",function(){shift(1)}),nb("Today",function(){setYear(n.getFullYear());setMonth(n.getMonth());setSelDay(null)})),
       h("div",{style:{fontFamily:FP_F,fontSize:13,color:"#555"}},"PnL: ",h("b",{style:{color:monthP>0?"#059669":monthP<0?"#dc2626":"#f7f7f7"}},fpM(monthP)),"  |  Days: ",h("b",{style:{color:"#111"}},monthD),"  |  Trades: ",h("b",{style:{color:"#111"}},monthN))),
